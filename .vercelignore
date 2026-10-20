@@ -1,0 +1,14 @@
+/vendor
+/node_modules
+/.git
+/legacy
+/storage/logs
+/.env
+.env.example
+AGENTS.md
+CLAUDE.md
+README.md
+phpunit.xml
+vite.config.js
+package.json
+package-lock.json

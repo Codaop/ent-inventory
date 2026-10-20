@@ -1,0 +1,573 @@
+<script>
+// ─── API wrapper ─────────────────────────────────────────────────────────────
+function api(fn) {
+  var args = Array.prototype.slice.call(arguments, 1);
+  return new Promise(function(resolve, reject) {
+    var runner = google.script.run
+      .withSuccessHandler(resolve)
+      .withFailureHandler(function(e) { reject(new Error(e.message || 'Server error')); });
+    runner[fn].apply(runner, args);
+  });
+}
+
+// ─── State ───────────────────────────────────────────────────────────────────
+var state = {
+  items: [],
+  categories: [],
+  currentItemId: null,
+  currentTxId: null
+};
+
+// ─── Utilities ───────────────────────────────────────────────────────────────
+function fmtDate(str) {
+  if (!str) return '—';
+  var d = new Date(str);
+  return isNaN(d) ? str : d.toLocaleDateString('id-ID', { day:'2-digit', month:'short', year:'numeric' });
+}
+
+function fmtCurrency(n) {
+  return 'Rp ' + Number(n || 0).toLocaleString('id-ID');
+}
+
+function statusBadge(s) {
+  var cls = { PENDING:'pending', APPROVED:'approved', REJECTED:'rejected',
+              RETURNED:'returned', OVERDUE:'overdue', COMPLETED:'completed' };
+  return '<span class="status-badge badge-' + (cls[s]||'returned') + '">' + (s||'—') + '</span>';
+}
+
+function escHtml(s) {
+  return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+// ─── Loading overlay ─────────────────────────────────────────────────────────
+function showLoading() { document.getElementById('loading-overlay').style.display = 'flex'; }
+function hideLoading() { document.getElementById('loading-overlay').style.display = 'none'; }
+
+// ─── Toast notifications ─────────────────────────────────────────────────────
+function showToast(msg, type) {
+  var bg = type === 'error' ? '#dc3545' : type === 'warning' ? '#ffc107' : '#198754';
+  var tc = type === 'warning' ? '#000' : '#fff';
+  var el = document.createElement('div');
+  el.className = 'toast show';
+  el.style.background = bg;
+  el.style.color = tc;
+  el.innerHTML = '<div class="toast-body d-flex align-items-center gap-2">' +
+    '<i class="bi bi-' + (type==='error'?'x-circle':'check-circle') + '"></i>' +
+    '<span>' + escHtml(msg) + '</span>' +
+    '</div>';
+  var container = document.getElementById('toast-container');
+  container.appendChild(el);
+  setTimeout(function() { el.remove(); }, 3500);
+}
+
+// ─── Navigation ──────────────────────────────────────────────────────────────
+function navigate(page) {
+  document.querySelectorAll('.page').forEach(function(p) { p.classList.remove('active'); });
+  document.querySelectorAll('.nav-link-item').forEach(function(l) { l.classList.remove('active'); });
+
+  var pageEl = document.getElementById('page-' + page);
+  if (pageEl) pageEl.classList.add('active');
+
+  var linkEl = document.querySelector('[data-page="' + page + '"]');
+  if (linkEl) linkEl.classList.add('active');
+
+  closeSidebar();
+
+  if (page === 'dashboard')      loadDashboard();
+  if (page === 'inventory')      loadInventory();
+  if (page === 'my-borrows')     loadMyBorrows();
+  if (page === 'admin-requests') loadPendingRequests();
+  if (page === 'admin-users')    loadUsers();
+  if (page === 'reports')        loadReports();
+}
+
+// ─── Sidebar (mobile) ────────────────────────────────────────────────────────
+function toggleSidebar() {
+  document.getElementById('sidebar').classList.toggle('open');
+  document.getElementById('sidebar-backdrop').classList.toggle('show');
+}
+function closeSidebar() {
+  document.getElementById('sidebar').classList.remove('open');
+  document.getElementById('sidebar-backdrop').classList.remove('show');
+}
+
+// ─── Dashboard ───────────────────────────────────────────────────────────────
+function loadDashboard() {
+  showLoading();
+  api('getDashboardStats').then(function(s) {
+    hideLoading();
+    document.getElementById('kpi-total').textContent   = s.totalItems;
+    document.getElementById('kpi-lowstock').textContent= s.lowStockCount;
+    document.getElementById('kpi-borrows').textContent = s.myActiveBorrows;
+    document.getElementById('kpi-value').textContent   = fmtCurrency(s.totalValue);
+
+    var pending = document.getElementById('kpi-pending-wrap');
+    if (CURRENT_USER.role === 'ADMIN') {
+      pending.style.display = '';
+      document.getElementById('kpi-pending').textContent = s.pendingApprovals;
+    } else {
+      pending.style.display = 'none';
+    }
+
+    var tbody = document.getElementById('tbl-recent-body');
+    tbody.innerHTML = s.recentActivity.length ? '' : '<tr><td colspan="6" class="text-center text-muted py-3">No activity yet.</td></tr>';
+    s.recentActivity.forEach(function(tx) {
+      var tr = document.createElement('tr');
+      tr.innerHTML = '<td>' + fmtDate(tx.timestamp) + '</td>' +
+        '<td>' + escHtml(tx.userDisplay) + '</td>' +
+        '<td>' + escHtml(tx.itemName) + '</td>' +
+        '<td>' + tx.qty + '</td>' +
+        '<td>' + escHtml(tx.type) + '</td>' +
+        '<td>' + statusBadge(tx.status) + '</td>';
+      tbody.appendChild(tr);
+    });
+  }).catch(function(e) {
+    hideLoading();
+    showToast(e.message, 'error');
+  });
+}
+
+// ─── Inventory ───────────────────────────────────────────────────────────────
+function loadInventory(filter) {
+  showLoading();
+  api('getCategories').then(function(cats) {
+    state.categories = cats;
+    return api('listItems', filter || null);
+  }).then(function(items) {
+    hideLoading();
+    state.items = items;
+    renderInventoryTable(items);
+  }).catch(function(e) {
+    hideLoading();
+    showToast(e.message, 'error');
+  });
+}
+
+function renderInventoryTable(items) {
+  var tbody = document.getElementById('tbl-inventory-body');
+  tbody.innerHTML = '';
+  if (!items.length) {
+    tbody.innerHTML = '<tr><td colspan="9" class="text-center text-muted py-4">No items found.</td></tr>';
+    return;
+  }
+  items.forEach(function(item) {
+    var lowStock = item.availableQty <= item.reorderThreshold;
+    var qtyClass = lowStock ? 'low-stock' : '';
+    var isAdmin  = CURRENT_USER.role === 'ADMIN';
+    var actions  = isAdmin
+      ? '<button class="btn btn-sm btn-outline-primary me-1" onclick="openEditItemModal(\'' + item.itemId + '\')" title="Edit"><i class="bi bi-pencil"></i></button>' +
+        '<button class="btn btn-sm btn-outline-secondary me-1" onclick="openAdjustModal(\'' + item.itemId + '\')" title="Adjust Stock"><i class="bi bi-plus-slash-minus"></i></button>' +
+        '<button class="btn btn-sm btn-outline-danger" onclick="confirmDeleteItem(\'' + item.itemId + '\')" title="Delete"><i class="bi bi-trash"></i></button>'
+      : '<button class="btn btn-sm btn-primary" onclick="openBorrowModal(\'' + item.itemId + '\')" ' +
+          (item.availableQty < 1 ? 'disabled' : '') + '>Borrow</button>';
+
+    var tr = document.createElement('tr');
+    tr.innerHTML =
+      '<td>' + escHtml(item.sku) + '</td>' +
+      '<td><strong>' + escHtml(item.name) + '</strong><div class="text-muted small">' + escHtml(item.category) + '</div></td>' +
+      '<td>' + escHtml(item.location) + '</td>' +
+      '<td class="' + qtyClass + '">' + item.availableQty + (lowStock ? ' <i class="bi bi-exclamation-triangle-fill text-danger small"></i>' : '') + '</td>' +
+      '<td>' + item.totalQty + '</td>' +
+      '<td>' + fmtCurrency(item.unitPrice) + '</td>' +
+      '<td>' + actions + '</td>';
+    tbody.appendChild(tr);
+  });
+}
+
+function filterInventory() {
+  var q   = document.getElementById('inv-search').value.trim();
+  var cat = document.getElementById('inv-filter-cat').value;
+  var low = document.getElementById('inv-filter-low').checked;
+  loadInventory({ search: q || null, category: cat || null, lowStock: low || null });
+}
+
+// ── Item Modal (Add / Edit) ───────────────────────────────────────────────────
+function openAddItemModal() {
+  state.currentItemId = null;
+  document.getElementById('item-modal-title').textContent = 'Add Item';
+  document.getElementById('form-item').reset();
+  populateCategoryDatalist();
+  bootstrap.Modal.getOrCreateInstance(document.getElementById('itemModal')).show();
+}
+
+function openEditItemModal(itemId) {
+  var item = state.items.find(function(i) { return i.itemId === itemId; });
+  if (!item) return;
+  state.currentItemId = itemId;
+  document.getElementById('item-modal-title').textContent = 'Edit Item';
+  document.getElementById('item-name').value       = item.name;
+  document.getElementById('item-sku').value        = item.sku;
+  document.getElementById('item-category').value   = item.category;
+  document.getElementById('item-location').value   = item.location;
+  document.getElementById('item-total-qty').value  = item.totalQty;
+  document.getElementById('item-avail-qty').value  = item.availableQty;
+  document.getElementById('item-threshold').value  = item.reorderThreshold;
+  document.getElementById('item-price').value      = item.unitPrice;
+  populateCategoryDatalist();
+  bootstrap.Modal.getOrCreateInstance(document.getElementById('itemModal')).show();
+}
+
+function populateCategoryDatalist() {
+  var dl = document.getElementById('category-list');
+  dl.innerHTML = '';
+  state.categories.forEach(function(c) {
+    var opt = document.createElement('option');
+    opt.value = c;
+    dl.appendChild(opt);
+  });
+}
+
+function saveItem() {
+  var payload = {
+    name:             document.getElementById('item-name').value.trim(),
+    sku:              document.getElementById('item-sku').value.trim(),
+    category:         document.getElementById('item-category').value.trim(),
+    location:         document.getElementById('item-location').value.trim(),
+    totalQty:         document.getElementById('item-total-qty').value,
+    availableQty:     document.getElementById('item-avail-qty').value,
+    reorderThreshold: document.getElementById('item-threshold').value,
+    unitPrice:        document.getElementById('item-price').value
+  };
+  if (!payload.name) { showToast('Item name required.', 'error'); return; }
+
+  showLoading();
+  var promise = state.currentItemId
+    ? api('updateItem', state.currentItemId, payload)
+    : api('createItem', payload);
+
+  promise.then(function() {
+    hideLoading();
+    bootstrap.Modal.getInstance(document.getElementById('itemModal')).hide();
+    showToast(state.currentItemId ? 'Item updated.' : 'Item created.');
+    loadInventory();
+  }).catch(function(e) {
+    hideLoading();
+    showToast(e.message, 'error');
+  });
+}
+
+// ── Delete Confirm ────────────────────────────────────────────────────────────
+function confirmDeleteItem(itemId) {
+  state.currentItemId = itemId;
+  bootstrap.Modal.getOrCreateInstance(document.getElementById('deleteModal')).show();
+}
+
+function doDeleteItem() {
+  showLoading();
+  api('deleteItem', state.currentItemId).then(function() {
+    hideLoading();
+    bootstrap.Modal.getInstance(document.getElementById('deleteModal')).hide();
+    showToast('Item deleted.');
+    loadInventory();
+  }).catch(function(e) {
+    hideLoading();
+    showToast(e.message, 'error');
+  });
+}
+
+// ── Adjust Stock ──────────────────────────────────────────────────────────────
+function openAdjustModal(itemId) {
+  state.currentItemId = itemId;
+  var item = state.items.find(function(i) { return i.itemId === itemId; });
+  document.getElementById('adjust-item-name').textContent = item ? item.name : '';
+  document.getElementById('adjust-delta').value = '';
+  document.getElementById('adjust-reason').value = '';
+  bootstrap.Modal.getOrCreateInstance(document.getElementById('adjustModal')).show();
+}
+
+function saveAdjust() {
+  var delta  = Number(document.getElementById('adjust-delta').value);
+  var reason = document.getElementById('adjust-reason').value.trim();
+  if (!delta) { showToast('Enter a non-zero quantity.', 'error'); return; }
+
+  showLoading();
+  api('adjustStock', state.currentItemId, delta, reason).then(function() {
+    hideLoading();
+    bootstrap.Modal.getInstance(document.getElementById('adjustModal')).hide();
+    showToast('Stock adjusted.');
+    loadInventory();
+  }).catch(function(e) {
+    hideLoading();
+    showToast(e.message, 'error');
+  });
+}
+
+// ─── Borrow Modal ─────────────────────────────────────────────────────────────
+function openBorrowModal(itemId) {
+  var item = state.items.find(function(i) { return i.itemId === itemId; });
+  if (!item) return;
+  state.currentItemId = itemId;
+
+  document.getElementById('borrow-item-name').textContent = item.name + ' (available: ' + item.availableQty + ')';
+  document.getElementById('borrow-qty').value   = 1;
+  document.getElementById('borrow-qty').max     = item.availableQty;
+
+  var tomorrow = new Date();
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  document.getElementById('borrow-due').min   = tomorrow.toISOString().split('T')[0];
+  document.getElementById('borrow-due').value = '';
+  document.getElementById('borrow-notes').value = '';
+
+  bootstrap.Modal.getOrCreateInstance(document.getElementById('borrowModal')).show();
+}
+
+function submitBorrow() {
+  var qty    = Number(document.getElementById('borrow-qty').value);
+  var due    = document.getElementById('borrow-due').value;
+  var notes  = document.getElementById('borrow-notes').value.trim();
+
+  if (!qty || qty < 1)  { showToast('Quantity must be at least 1.', 'error'); return; }
+  if (!due)             { showToast('Due date is required.', 'error');  return; }
+
+  showLoading();
+  api('requestBorrow', { itemId: state.currentItemId, qty: qty, dueDate: due, notes: notes })
+    .then(function() {
+      hideLoading();
+      bootstrap.Modal.getInstance(document.getElementById('borrowModal')).hide();
+      showToast('Borrow request submitted. Waiting for admin approval.');
+      loadInventory();
+    }).catch(function(e) {
+      hideLoading();
+      showToast(e.message, 'error');
+    });
+}
+
+// ─── My Borrows ───────────────────────────────────────────────────────────────
+function loadMyBorrows() {
+  showLoading();
+  api('getMyBorrows').then(function(txs) {
+    hideLoading();
+    var tbody = document.getElementById('tbl-my-borrows-body');
+    tbody.innerHTML = '';
+    if (!txs.length) {
+      tbody.innerHTML = '<tr><td colspan="7" class="text-center text-muted py-4">No borrow history.</td></tr>';
+      return;
+    }
+    txs.forEach(function(tx) {
+      var canReturn = tx.status === 'APPROVED' || tx.status === 'OVERDUE';
+      var returnBtn = canReturn
+        ? '<button class="btn btn-sm btn-success" onclick="doReturn(\'' + tx.txId + '\')"><i class="bi bi-arrow-return-left"></i> Return</button>'
+        : '';
+      var tr = document.createElement('tr');
+      tr.innerHTML =
+        '<td><strong>' + escHtml(tx.itemName) + '</strong></td>' +
+        '<td>' + tx.qty + '</td>' +
+        '<td>' + fmtDate(tx.borrowDate) + '</td>' +
+        '<td>' + fmtDate(tx.dueDate) + '</td>' +
+        '<td>' + (tx.returnDate ? fmtDate(tx.returnDate) : '—') + '</td>' +
+        '<td>' + statusBadge(tx.status) + '</td>' +
+        '<td>' + returnBtn + '</td>';
+      tbody.appendChild(tr);
+    });
+  }).catch(function(e) {
+    hideLoading();
+    showToast(e.message, 'error');
+  });
+}
+
+function doReturn(txId) {
+  if (!confirm('Confirm return of this item?')) return;
+  showLoading();
+  api('returnItem', txId).then(function() {
+    hideLoading();
+    showToast('Item returned successfully.');
+    loadMyBorrows();
+  }).catch(function(e) {
+    hideLoading();
+    showToast(e.message, 'error');
+  });
+}
+
+// ─── Admin: Pending Requests ──────────────────────────────────────────────────
+function loadPendingRequests() {
+  showLoading();
+  api('getPendingRequests').then(function(txs) {
+    hideLoading();
+    var tbody = document.getElementById('tbl-pending-body');
+    tbody.innerHTML = '';
+    if (!txs.length) {
+      tbody.innerHTML = '<tr><td colspan="8" class="text-center text-muted py-4">No pending requests.</td></tr>';
+      return;
+    }
+    txs.forEach(function(tx) {
+      var tr = document.createElement('tr');
+      tr.innerHTML =
+        '<td>' + escHtml(tx.userDisplay) + '<div class="text-muted small">' + escHtml(tx.userEmail) + '</div></td>' +
+        '<td><strong>' + escHtml(tx.itemName) + '</strong></td>' +
+        '<td>' + tx.qty + '</td>' +
+        '<td>' + fmtDate(tx.borrowDate) + '</td>' +
+        '<td>' + fmtDate(tx.dueDate) + '</td>' +
+        '<td>' + escHtml(tx.notes || '—') + '</td>' +
+        '<td>' +
+          '<button class="btn btn-sm btn-success me-1" onclick="doApprove(\'' + tx.txId + '\')"><i class="bi bi-check-lg"></i> Approve</button>' +
+          '<button class="btn btn-sm btn-outline-danger" onclick="openRejectModal(\'' + tx.txId + '\')"><i class="bi bi-x-lg"></i> Reject</button>' +
+        '</td>';
+      tbody.appendChild(tr);
+    });
+  }).catch(function(e) {
+    hideLoading();
+    showToast(e.message, 'error');
+  });
+}
+
+function doApprove(txId) {
+  showLoading();
+  api('approveRequest', txId).then(function() {
+    hideLoading();
+    showToast('Request approved.');
+    loadPendingRequests();
+  }).catch(function(e) {
+    hideLoading();
+    showToast(e.message, 'error');
+  });
+}
+
+function openRejectModal(txId) {
+  state.currentTxId = txId;
+  document.getElementById('reject-reason').value = '';
+  bootstrap.Modal.getOrCreateInstance(document.getElementById('rejectModal')).show();
+}
+
+function doReject() {
+  var reason = document.getElementById('reject-reason').value.trim();
+  showLoading();
+  api('rejectRequest', state.currentTxId, reason).then(function() {
+    hideLoading();
+    bootstrap.Modal.getInstance(document.getElementById('rejectModal')).hide();
+    showToast('Request rejected.');
+    loadPendingRequests();
+  }).catch(function(e) {
+    hideLoading();
+    showToast(e.message, 'error');
+  });
+}
+
+// ─── Admin: Users ─────────────────────────────────────────────────────────────
+function loadUsers() {
+  showLoading();
+  api('getUsers').then(function(users) {
+    hideLoading();
+    var tbody = document.getElementById('tbl-users-body');
+    tbody.innerHTML = '';
+    if (!users.length) {
+      tbody.innerHTML = '<tr><td colspan="4" class="text-center text-muted py-4">No users.</td></tr>';
+      return;
+    }
+    users.forEach(function(u) {
+      var tr = document.createElement('tr');
+      tr.innerHTML =
+        '<td>' + escHtml(u.email) + '</td>' +
+        '<td>' + escHtml(u.displayName) + '</td>' +
+        '<td><span class="badge ' + (u.role==='ADMIN'?'bg-primary':'bg-secondary') + '">' + u.role + '</span></td>' +
+        '<td>' + (u.active ? '<span class="badge bg-success">Active</span>' : '<span class="badge bg-secondary">Inactive</span>') + '</td>' +
+        '<td>' +
+          '<button class="btn btn-sm btn-outline-secondary" onclick="toggleUserActive(\'' + escHtml(u.email) + '\',' + !u.active + ')">' +
+          (u.active ? '<i class="bi bi-person-x"></i> Deactivate' : '<i class="bi bi-person-check"></i> Activate') + '</button>' +
+        '</td>';
+      tbody.appendChild(tr);
+    });
+  }).catch(function(e) {
+    hideLoading();
+    showToast(e.message, 'error');
+  });
+}
+
+function openAddUserModal() {
+  document.getElementById('form-user').reset();
+  bootstrap.Modal.getOrCreateInstance(document.getElementById('userModal')).show();
+}
+
+function saveUser() {
+  var email       = document.getElementById('user-email').value.trim();
+  var displayName = document.getElementById('user-displayname').value.trim();
+  var role        = document.getElementById('user-role').value;
+  if (!email) { showToast('Email required.', 'error'); return; }
+
+  showLoading();
+  api('createUser', { email: email, displayName: displayName, role: role }).then(function() {
+    hideLoading();
+    bootstrap.Modal.getInstance(document.getElementById('userModal')).hide();
+    showToast('User added.');
+    loadUsers();
+  }).catch(function(e) {
+    hideLoading();
+    showToast(e.message === 'EMAIL_EXISTS' ? 'Email already exists.' : e.message, 'error');
+  });
+}
+
+function toggleUserActive(email, active) {
+  showLoading();
+  api('updateUser', email, { active: active }).then(function() {
+    hideLoading();
+    showToast('User updated.');
+    loadUsers();
+  }).catch(function(e) {
+    hideLoading();
+    showToast(e.message, 'error');
+  });
+}
+
+// ─── Reports ─────────────────────────────────────────────────────────────────
+function loadReports() {
+  var filter = {};
+  var from  = document.getElementById('rpt-from').value;
+  var to    = document.getElementById('rpt-to').value;
+  var type  = document.getElementById('rpt-type').value;
+  var myOnly = document.getElementById('rpt-my-only') ? document.getElementById('rpt-my-only').checked : false;
+  if (from)  filter.fromDate = from;
+  if (to)    filter.toDate   = to;
+  if (type)  filter.type     = type;
+  if (myOnly) filter.myOnly  = true;
+
+  showLoading();
+  api('getTransactions', filter).then(function(txs) {
+    hideLoading();
+    var tbody = document.getElementById('tbl-reports-body');
+    tbody.innerHTML = '';
+    if (!txs.length) {
+      tbody.innerHTML = '<tr><td colspan="8" class="text-center text-muted py-4">No records.</td></tr>';
+      return;
+    }
+    txs.forEach(function(tx) {
+      var tr = document.createElement('tr');
+      tr.innerHTML =
+        '<td>' + fmtDate(tx.timestamp) + '</td>' +
+        '<td>' + escHtml(tx.userDisplay) + '</td>' +
+        '<td>' + escHtml(tx.itemName) + '</td>' +
+        '<td>' + tx.qty + '</td>' +
+        '<td><span class="badge bg-secondary">' + tx.type + '</span></td>' +
+        '<td>' + statusBadge(tx.status) + '</td>' +
+        '<td>' + fmtDate(tx.dueDate) + '</td>' +
+        '<td>' + (tx.returnDate ? fmtDate(tx.returnDate) : '—') + '</td>';
+      tbody.appendChild(tr);
+    });
+  }).catch(function(e) {
+    hideLoading();
+    showToast(e.message, 'error');
+  });
+}
+
+// ─── Init ─────────────────────────────────────────────────────────────────────
+document.addEventListener('DOMContentLoaded', function() {
+  // Populate category filter
+  api('getCategories').then(function(cats) {
+    state.categories = cats;
+    var sel = document.getElementById('inv-filter-cat');
+    sel.innerHTML = '<option value="">All Categories</option>';
+    cats.forEach(function(c) {
+      var opt = document.createElement('option');
+      opt.value = c; opt.textContent = c;
+      sel.appendChild(opt);
+    });
+  });
+
+  // Hide admin-only nav if BORROWER
+  if (CURRENT_USER.role !== 'ADMIN') {
+    document.querySelectorAll('.admin-only').forEach(function(el) {
+      el.style.display = 'none';
+    });
+  }
+
+  navigate('dashboard');
+});
+</script>
