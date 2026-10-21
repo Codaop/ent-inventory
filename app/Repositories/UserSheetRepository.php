@@ -23,7 +23,7 @@ class UserSheetRepository
                 continue;
             }
 
-            $isActive = $row[3] === true || strtoupper((string) $row[3]) === 'TRUE';
+            $isActive = $this->toBool($row[3] ?? false);
             $rowEmail = strtolower(trim((string) $row[0]));
 
             if ($rowEmail === $needle && $isActive) {
@@ -139,6 +139,10 @@ class UserSheetRepository
 
     private function toBool(mixed $value): bool
     {
-        return $value === true || strtoupper((string) $value) === 'TRUE';
+        if ($value === true || $value === 1 || $value === '1') {
+            return true;
+        }
+
+        return strtoupper(trim((string) $value)) === 'TRUE';
     }
 }

@@ -44,6 +44,15 @@ Route::middleware('auth')->group(function () {
     });
 });
 
-Route::get('/', function () {
-    return view('welcome');
+Route::get('/', function (\Illuminate\Http\Request $request) {
+    if (! $request->hasSession() || ! $request->session()->has(\App\Http\Middleware\AuthenticateUser::SESSION_KEY)) {
+        return redirect('/login');
+    }
+
+    $email = $request->session()->get(\App\Http\Middleware\AuthenticateUser::SESSION_KEY);
+    return response()->json([
+        'status' => 'authenticated',
+        'email' => $email,
+        'message' => 'Silakan akses endpoint inventaris (/items, /borrows, /users, dll.)',
+    ]);
 });
