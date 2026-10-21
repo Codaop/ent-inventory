@@ -29,7 +29,7 @@ class GoogleSheetClient implements SheetClient
     {
         $response = $this->service->spreadsheets_values->get(
             $this->spreadsheetId,
-            $this->tableRange($sheetName),
+            $this->quote($sheetName),
             ['valueRenderOption' => 'UNFORMATTED_VALUE'],
         );
 
