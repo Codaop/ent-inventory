@@ -27,50 +27,65 @@ class GoogleSheetClient implements SheetClient
 
     public function readRows(string $sheetName): array
     {
-        $response = $this->service->spreadsheets_values->get(
-            $this->spreadsheetId,
-            $this->quote($sheetName),
-            ['valueRenderOption' => 'UNFORMATTED_VALUE'],
-        );
+        try {
+            $response = $this->service->spreadsheets_values->get(
+                $this->spreadsheetId,
+                $this->quote($sheetName),
+                ['valueRenderOption' => 'UNFORMATTED_VALUE'],
+            );
 
-        $values = $response->getValues() ?? [];
+            $values = $response->getValues() ?? [];
 
-        return array_values(array_slice($values, 1));
+            return array_values(array_slice($values, 1));
+        } catch (\Throwable $e) {
+            error_log('[Sheets] readRows(' . $sheetName . ') failed: ' . $e->getMessage());
+            return [];
+        }
     }
 
     public function appendRow(string $sheetName, array $row): void
     {
-        $this->service->spreadsheets_values->append(
-            $this->spreadsheetId,
-            $this->tableRange($sheetName),
-            new ValueRange(['values' => [$row]]),
-            ['valueInputOption' => 'RAW'],
-        );
+        try {
+            $this->service->spreadsheets_values->append(
+                $this->spreadsheetId,
+                $this->tableRange($sheetName),
+                new ValueRange(['values' => [$row]]),
+                ['valueInputOption' => 'RAW'],
+            );
+        } catch (\Throwable $e) {
+            error_log('[Sheets] appendRow(' . $sheetName . ') failed: ' . $e->getMessage());
+            throw $e;
+        }
     }
 
     public function updateCells(string $sheetName, int $spreadsheetRow, array $cellsByColumn): void
     {
-        $data = [];
+        try {
+            $data = [];
 
-        foreach ($cellsByColumn as $column => $value) {
-            $data[] = new ValueRange([
-                'range' => sprintf(
-                    '%s!%s%d',
-                    $this->quote($sheetName),
-                    self::columnLetter((int) $column),
-                    $spreadsheetRow,
-                ),
-                'values' => [[$value]],
-            ]);
+            foreach ($cellsByColumn as $column => $value) {
+                $data[] = new ValueRange([
+                    'range' => sprintf(
+                        '%s!%s%d',
+                        $this->quote($sheetName),
+                        self::columnLetter((int) $column),
+                        $spreadsheetRow,
+                    ),
+                    'values' => [[$value]],
+                ]);
+            }
+
+            $this->service->spreadsheets_values->batchUpdate(
+                $this->spreadsheetId,
+                new BatchUpdateValuesRequest([
+                    'valueInputOption' => 'RAW',
+                    'data' => $data,
+                ]),
+            );
+        } catch (\Throwable $e) {
+            error_log('[Sheets] updateCells(' . $sheetName . ') failed: ' . $e->getMessage());
+            throw $e;
         }
-
-        $this->service->spreadsheets_values->batchUpdate(
-            $this->spreadsheetId,
-            new BatchUpdateValuesRequest([
-                'valueInputOption' => 'RAW',
-                'data' => $data,
-            ]),
-        );
     }
 
     /**
