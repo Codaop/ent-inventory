@@ -46,7 +46,7 @@ class ItemController extends Controller
             },
         );
 
-        return response()->json(['items' => array_values($items)]);
+        return response()->json(array_values($items));
     }
 
     public function show(string $itemId): JsonResponse

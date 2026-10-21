@@ -84,7 +84,7 @@ class BorrowController extends Controller
             fn (array $tx): bool => $tx['userEmail'] === $user['email'] && $tx['type'] === 'BORROW',
         );
 
-        return response()->json(['transactions' => array_values(array_reverse($borrows))]);
+        return response()->json(array_values(array_reverse($borrows)));
     }
 
     /**
@@ -97,7 +97,7 @@ class BorrowController extends Controller
             fn (array $tx): bool => $tx['status'] === 'PENDING',
         );
 
-        return response()->json(['transactions' => array_values(array_reverse($pending))]);
+        return response()->json(array_values(array_reverse($pending)));
     }
 
     /**
@@ -111,7 +111,7 @@ class BorrowController extends Controller
                 && in_array($tx['status'], ['PENDING', 'APPROVED', 'OVERDUE'], true),
         );
 
-        return response()->json(['transactions' => array_values(array_reverse($active))]);
+        return response()->json(array_values(array_reverse($active)));
     }
 
     /**
