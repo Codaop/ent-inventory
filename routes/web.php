@@ -13,28 +13,6 @@ Route::get('/auth/google', [AuthController::class, 'redirect'])->name('auth.goog
 Route::get('/auth/google/callback', [AuthController::class, 'callback'])->name('auth.callback');
 Route::post('/auth/logout', [AuthController::class, 'logout'])->name('auth.logout');
 
-// Debug endpoint to test Google Sheets API (no auth required)
-Route::get('/debug/sheets', function (\App\Sheets\SheetClient $client) {
-    $results = [];
-    foreach (['Items', 'Categories', 'Transactions', 'Users'] as $sheet) {
-        try {
-            $rows = $client->readRows($sheet);
-            $results[$sheet] = [
-                'count' => count($rows),
-                'first_row' => $rows[0] ?? null,
-                'error' => null,
-            ];
-        } catch (\Throwable $e) {
-            $results[$sheet] = [
-                'count' => 0,
-                'first_row' => null,
-                'error' => $e->getMessage(),
-            ];
-        }
-    }
-    return response()->json($results);
-});
-
 Route::middleware('auth')->group(function () {
     Route::get('/', function (\Illuminate\Http\Request $request) {
         $currentUser = $request->attributes->get('currentUser');
