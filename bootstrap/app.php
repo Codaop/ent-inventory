@@ -18,6 +18,7 @@ return Application::configure(basePath: dirname(__DIR__))
             'auth' => AuthenticateUser::class,
             'admin' => RequireAdmin::class,
         ]);
+        $middleware->trustProxies(at: '*');
     })
     ->withExceptions(function (Exceptions $exceptions): void {
         $exceptions->shouldRenderJsonWhen(

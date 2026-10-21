@@ -14,6 +14,11 @@ Route::get('/auth/google/callback', [AuthController::class, 'callback'])->name('
 Route::post('/auth/logout', [AuthController::class, 'logout'])->name('auth.logout');
 
 Route::middleware('auth')->group(function () {
+    Route::get('/', function (\Illuminate\Http\Request $request) {
+        $currentUser = $request->attributes->get('currentUser');
+        return view('dashboard', compact('currentUser'));
+    });
+
     Route::get('/items', [ItemController::class, 'index']);
     Route::get('/items/{itemId}', [ItemController::class, 'show']);
     Route::get('/categories', [CategoryController::class, 'index']);
@@ -42,17 +47,4 @@ Route::middleware('auth')->group(function () {
         Route::patch('/users/{email}', [UserController::class, 'update']);
         Route::delete('/users/{email}', [UserController::class, 'destroy']);
     });
-});
-
-Route::get('/', function (\Illuminate\Http\Request $request) {
-    if (! $request->hasSession() || ! $request->session()->has(\App\Http\Middleware\AuthenticateUser::SESSION_KEY)) {
-        return redirect('/login');
-    }
-
-    $email = $request->session()->get(\App\Http\Middleware\AuthenticateUser::SESSION_KEY);
-    return response()->json([
-        'status' => 'authenticated',
-        'email' => $email,
-        'message' => 'Silakan akses endpoint inventaris (/items, /borrows, /users, dll.)',
-    ]);
 });
