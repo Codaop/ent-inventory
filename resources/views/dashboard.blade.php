@@ -391,7 +391,14 @@
 
   <!-- ─── My Borrows ───────────────────────────────── -->
   <div class="page" id="page-my-borrows">
-    <h5 class="fw-bold text-dark mb-4">My Borrows</h5>
+    <div class="d-flex align-items-center justify-content-between flex-wrap gap-2 mb-4">
+      <h5 class="fw-bold text-dark mb-0">My Borrows</h5>
+      @if($currentUser['role'] === 'ADMIN')
+      <button class="btn btn-primary" onclick="openAdminBorrowModal()">
+        <i class="bi bi-plus-lg me-1"></i>New Borrow
+      </button>
+      @endif
+    </div>
     <div class="card">
       <div class="table-responsive">
         <table class="table table-hover mb-0">
@@ -686,6 +693,48 @@
     </div>
   </div>
 </div>
+
+@if($currentUser['role'] === 'ADMIN')
+<!-- Admin New Borrow Modal -->
+<div class="modal fade" id="adminBorrowModal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header" style="background:var(--primary);color:#fff">
+        <h5 class="modal-title">New Borrow (Admin)</h5>
+        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <div class="mb-3">
+          <label class="form-label">Item <span class="text-danger">*</span></label>
+          <select id="admin-borrow-item" class="form-select" onchange="onAdminBorrowItemChange()">
+            <option value="">Loading…</option>
+          </select>
+        </div>
+        <div class="mb-3">
+          <label class="form-label">Quantity <span class="text-danger">*</span></label>
+          <input type="number" id="admin-borrow-qty" class="form-control" min="1" value="1">
+        </div>
+        <div class="mb-3">
+          <label class="form-label">Return Due Date <span class="text-danger">*</span></label>
+          <input type="date" id="admin-borrow-due" class="form-control">
+        </div>
+        <div class="mb-3">
+          <label class="form-label">Notes</label>
+          <textarea id="admin-borrow-notes" class="form-control" rows="2" placeholder="Purpose, event, etc."></textarea>
+        </div>
+        <div class="alert alert-success small py-2 mb-0">
+          <i class="bi bi-info-circle me-1"></i>
+          Admin borrow is approved immediately and stock is reserved right away.
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+        <button type="button" class="btn btn-primary" onclick="submitAdminBorrow()">Submit</button>
+      </div>
+    </div>
+  </div>
+</div>
+@endif
 
 <!-- Bootstrap JS -->
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
@@ -1102,6 +1151,77 @@ function submitBorrow() {
 }
 
 // ─── My Borrows ───────────────────────────────────────────────────────────────
+var adminBorrowItems = [];
+
+function openAdminBorrowModal() {
+  document.getElementById('admin-borrow-notes').value = '';
+
+  var tomorrow = new Date();
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  document.getElementById('admin-borrow-due').min   = tomorrow.toISOString().split('T')[0];
+  document.getElementById('admin-borrow-due').value = '';
+
+  var sel = document.getElementById('admin-borrow-item');
+  sel.innerHTML = '<option value="">Loading…</option>';
+
+  bootstrap.Modal.getOrCreateInstance(document.getElementById('adminBorrowModal')).show();
+
+  api('GET', '/items').then(function(items) {
+    adminBorrowItems = (items || []).filter(function(i) { return Number(i.availableQty) > 0; });
+    var html = '<option value="">Select item…</option>';
+    adminBorrowItems.forEach(function(i) {
+      html += '<option value="' + escHtml(i.itemId) + '">' +
+        escHtml(i.name) + (i.sku ? ' — ' + escHtml(i.sku) : '') +
+        ' (available: ' + i.availableQty + ')</option>';
+    });
+    sel.innerHTML = html;
+    onAdminBorrowItemChange();
+  }).catch(function(e) {
+    sel.innerHTML = '<option value="">Failed to load items</option>';
+    showToast(e.message, 'error');
+  });
+}
+
+function onAdminBorrowItemChange() {
+  var id       = document.getElementById('admin-borrow-item').value;
+  var qtyInput = document.getElementById('admin-borrow-qty');
+  var item     = adminBorrowItems.find(function(i) { return i.itemId === id; });
+
+  if (item) {
+    qtyInput.max = item.availableQty;
+    if (!Number(qtyInput.value) || Number(qtyInput.value) < 1 || Number(qtyInput.value) > Number(item.availableQty)) {
+      qtyInput.value = 1;
+    }
+  } else {
+    qtyInput.removeAttribute('max');
+    qtyInput.value = 1;
+  }
+}
+
+function submitAdminBorrow() {
+  var itemId = document.getElementById('admin-borrow-item').value;
+  var qty    = Number(document.getElementById('admin-borrow-qty').value);
+  var due    = document.getElementById('admin-borrow-due').value;
+  var notes  = document.getElementById('admin-borrow-notes').value.trim();
+
+  if (!itemId)      { showToast('Please select an item.', 'error'); return; }
+  if (!qty || qty < 1) { showToast('Quantity must be at least 1.', 'error'); return; }
+  if (!due)         { showToast('Due date is required.', 'error');  return; }
+
+  showLoading();
+  api('POST', '/borrows', { itemId: itemId, qty: qty, dueDate: due, notes: notes })
+    .then(function() {
+      hideLoading();
+      bootstrap.Modal.getInstance(document.getElementById('adminBorrowModal')).hide();
+      showToast('Borrow approved. Stock reserved.');
+      loadMyBorrows();
+      loadDashboard();
+    }).catch(function(e) {
+      hideLoading();
+      showToast(e.message, 'error');
+    });
+}
+
 function loadMyBorrows() {
   showLoading();
   api('GET', '/borrows/my').then(function(txs) {

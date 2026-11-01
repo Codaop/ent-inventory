@@ -49,8 +49,14 @@ class BorrowController extends Controller
             return $this->error('INSUFFICIENT_STOCK', 422);
         }
 
+        $isAdmin = ($user['role'] ?? '') === 'ADMIN';
         $now = now()->format('Y-m-d H:i:s');
         $txId = (string) Str::uuid();
+        $newAvail = $item['availableQty'] - $qty;
+
+        if ($isAdmin) {
+            $this->items->updateAvailableQty($item['itemId'], $newAvail);
+        }
 
         $this->transactions->appendTransaction([
             'txId' => $txId,
@@ -61,15 +67,23 @@ class BorrowController extends Controller
             'itemName' => $item['name'],
             'qty' => $qty,
             'type' => 'BORROW',
-            'status' => 'PENDING',
+            'status' => $isAdmin ? 'APPROVED' : 'PENDING',
             'borrowDate' => $now,
             'dueDate' => date('Y-m-d H:i:s', strtotime((string) $payload['dueDate'])),
             'returnDate' => '',
-            'approvedBy' => '',
+            'approvedBy' => $isAdmin ? $user['email'] : '',
             'notes' => (string) $request->input('notes', ''),
         ]);
 
-        return response()->json(['ok' => true, 'txId' => $txId]);
+        if ($isAdmin && $newAvail <= $item['reorderThreshold']) {
+            $this->notifications->lowStockAlert(array_merge($item, ['availableQty' => $newAvail]));
+        }
+
+        return response()->json([
+            'ok' => true,
+            'txId' => $txId,
+            'status' => $isAdmin ? 'APPROVED' : 'PENDING',
+        ]);
     }
 
     /**
