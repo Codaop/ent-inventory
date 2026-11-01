@@ -796,7 +796,7 @@ function navigate(page) {
   if (page === 'my-borrows')     { loadMyBorrows(); }
   if (page === 'admin-requests') { loadPendingRequests(); }
   if (page === 'admin-users')    { loadUsers(); }
-  if (page === 'reports')        { /* user clicks Filter to load */ }
+  if (page === 'reports')        { loadReports(); }
 }
 
 // ─── Sidebar (mobile) ────────────────────────────────────────────────────────

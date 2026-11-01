@@ -13,6 +13,33 @@ Route::get('/auth/google', [AuthController::class, 'redirect'])->name('auth.goog
 Route::get('/auth/google/callback', [AuthController::class, 'callback'])->name('auth.callback');
 Route::post('/auth/logout', [AuthController::class, 'logout'])->name('auth.logout');
 
+Route::get('/debug/reports', function (\App\Repositories\TransactionSheetRepository $txs, \Illuminate\Http\Request $request) {
+    $all = $txs->allTransactions();
+    $from = (string) $request->query('fromDate', '');
+    $to = (string) $request->query('toDate', '');
+    $type = (string) $request->query('type', '');
+
+    $filtered = array_filter($all, function (array $tx) use ($from, $to, $type): bool {
+        if ($type !== '' && $tx['type'] !== $type) { return false; }
+        if ($from !== '' && $tx['timestamp'] !== '') {
+            if (substr($tx['timestamp'], 0, 10) < $from) { return false; }
+        }
+        if ($to !== '' && $tx['timestamp'] !== '') {
+            if (substr($tx['timestamp'], 0, 10) > $to) { return false; }
+        }
+        return true;
+    });
+
+    return response()->json([
+        'total_rows' => count($all),
+        'filtered_rows' => count($filtered),
+        'types' => array_count_values(array_map(fn ($t) => (string) $t['type'], $all)),
+        'statuses' => array_count_values(array_map(fn ($t) => (string) $t['status'], $all)),
+        'timestamp_min' => min(array_map(fn ($t) => (string) $t['timestamp'], $all) ?: ['']),
+        'timestamp_max' => max(array_map(fn ($t) => (string) $t['timestamp'], $all) ?: ['']),
+    ]);
+});
+
 Route::middleware('auth')->group(function () {
     Route::get('/', function (\Illuminate\Http\Request $request) {
         $currentUser = $request->attributes->get('currentUser');
