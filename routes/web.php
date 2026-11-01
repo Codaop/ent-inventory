@@ -29,6 +29,8 @@ Route::middleware('auth')->group(function () {
 
     Route::post('/borrows', [BorrowController::class, 'store']);
     Route::get('/borrows/my', [BorrowController::class, 'my']);
+    Route::get('/borrows/reports', [BorrowController::class, 'reports']);
+    Route::get('/transactions/recent', [BorrowController::class, 'recent']);
     Route::post('/borrows/{txId}/return', [BorrowController::class, 'return']);
 
     Route::middleware('admin')->group(function () {

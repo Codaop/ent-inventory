@@ -115,6 +115,54 @@ class BorrowController extends Controller
     }
 
     /**
+     * All transactions with optional date-range and type filters for the
+     * Reports page. Returns newest first.
+     */
+    public function reports(Request $request): JsonResponse
+    {
+        $from = (string) $request->query('fromDate', '');
+        $to = (string) $request->query('toDate', '');
+        $type = (string) $request->query('type', '');
+
+        $txs = $this->transactions->allTransactions();
+
+        $filtered = array_filter($txs, function (array $tx) use ($from, $to, $type): bool {
+            if ($type !== '' && $tx['type'] !== $type) {
+                return false;
+            }
+            if ($from !== '' && $tx['timestamp'] !== '') {
+                $txDate = substr($tx['timestamp'], 0, 10);
+                if ($txDate < $from) {
+                    return false;
+                }
+            }
+            if ($to !== '' && $tx['timestamp'] !== '') {
+                $txDate = substr($tx['timestamp'], 0, 10);
+                if ($txDate > $to) {
+                    return false;
+                }
+            }
+
+            return true;
+        });
+
+        return response()->json(array_values(array_reverse($filtered)));
+    }
+
+    /**
+     * Latest transactions across all users for the dashboard Recent Activity
+     * table. Newest first, limited to 10.
+     */
+    public function recent(): JsonResponse
+    {
+        $txs = $this->transactions->allTransactions();
+
+        usort($txs, fn (array $a, array $b): int => strcmp($b['timestamp'], $a['timestamp']));
+
+        return response()->json(array_slice($txs, 0, 10));
+    }
+
+    /**
      * approveRequest() from Borrow.gs: reserve stock, mark APPROVED with
      * the admin as approver, then notify the borrower and — when the item
      * falls to or below its threshold — the admins.

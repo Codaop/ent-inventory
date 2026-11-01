@@ -815,13 +815,15 @@ function loadDashboard() {
 
   var itemsP   = api('GET', '/items');
   var borrowsP = api('GET', '/borrows/my');
+  var recentP  = api('GET', '/transactions/recent');
   var pendingP = CURRENT_USER.role === 'ADMIN' ? api('GET', '/borrows/pending') : Promise.resolve([]);
 
-  Promise.all([itemsP, borrowsP, pendingP]).then(function(results) {
+  Promise.all([itemsP, borrowsP, recentP, pendingP]).then(function(results) {
     hideLoading();
     var items   = results[0] || [];
     var myBorrows  = results[1] || [];
-    var pending = results[2] || [];
+    var recentTx = results[2] || [];
+    var pending = results[3] || [];
 
     var totalItems  = items.length;
     var lowStock    = items.filter(function(i) { return i.availableQty <= i.reorderThreshold; }).length;
@@ -842,20 +844,16 @@ function loadDashboard() {
       badgePending.style.display = pending.length > 0 ? '' : 'none';
     }
 
-    // Recent: combine borrows (sorted by borrowDate desc, take 10)
-    var recent = myBorrows.slice().sort(function(a, b) {
-      return new Date(b.borrowDate || 0) - new Date(a.borrowDate || 0);
-    }).slice(0, 10);
-
+    // Recent: use pre-sorted recent transactions from server
     var tbody = document.getElementById('tbl-recent-body');
-    tbody.innerHTML = recent.length ? '' : '<tr><td colspan="6" class="text-center text-muted py-3">No activity yet.</td></tr>';
-    recent.forEach(function(tx) {
+    tbody.innerHTML = recentTx.length ? '' : '<tr><td colspan="6" class="text-center text-muted py-3">No activity yet.</td></tr>';
+    recentTx.forEach(function(tx) {
       var tr = document.createElement('tr');
-      tr.innerHTML = '<td>' + fmtDate(tx.borrowDate) + '</td>' +
+      tr.innerHTML = '<td>' + fmtDate(tx.borrowDate || tx.timestamp) + '</td>' +
         '<td>' + escHtml(tx.userDisplay || tx.userEmail || '') + '</td>' +
         '<td>' + escHtml(tx.itemName || '') + '</td>' +
         '<td>' + (tx.qty || '') + '</td>' +
-        '<td>BORROW</td>' +
+        '<td><span class="badge bg-secondary">' + escHtml(tx.type) + '</span></td>' +
         '<td>' + statusBadge(tx.status) + '</td>';
       tbody.appendChild(tr);
     });
@@ -1288,7 +1286,7 @@ function loadReports() {
   if (to)   { params.push('toDate='   + encodeURIComponent(to)); }
   if (type) { params.push('type='     + encodeURIComponent(type)); }
 
-  var url = '/borrows/active' + (params.length ? '?' + params.join('&') : '');
+  var url = '/borrows/reports' + (params.length ? '?' + params.join('&') : '');
 
   showLoading();
   api('GET', url).then(function(txs) {
@@ -1306,7 +1304,7 @@ function loadReports() {
         '<td>' + escHtml(tx.userDisplay || tx.userEmail || '') + '</td>' +
         '<td>' + escHtml(tx.itemName) + '</td>' +
         '<td>' + tx.qty + '</td>' +
-        '<td><span class="badge bg-secondary">BORROW</span></td>' +
+        '<td><span class="badge bg-secondary">' + escHtml(tx.type) + '</span></td>' +
         '<td>' + statusBadge(tx.status) + '</td>' +
         '<td>' + fmtDate(tx.dueDate) + '</td>' +
         '<td>' + (tx.returnDate ? fmtDate(tx.returnDate) : '—') + '</td>';
